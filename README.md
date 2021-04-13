@@ -1,1 +1,1 @@
-# Multicore Support
+# Multicore Demo System

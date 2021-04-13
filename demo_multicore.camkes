@@ -1,0 +1,39 @@
+/* Copyright (C) 2020, HENSOLDT Cyber GmbH */
+
+/**
+ * @file
+ * @brief Assembly file of the CAmkES application.
+ */
+
+import "components/multicore_app/multicore_app.camkes";
+
+#include "TimeServer/camkes/TimeServer.camkes"
+TimeServer_COMPONENT_DEFINE(TimeServer)
+
+assembly {
+    composition {
+        component multicore_app  instance01;
+        component multicore_app  instance02;
+
+        //----------------------------------------------------------------------
+        // TimeServer
+        //----------------------------------------------------------------------
+        component TimeServer timeServer;
+
+        TimeServer_INSTANCE_CONNECT_CLIENTS(
+            timeServer,
+            instance01.timeServer_rpc, instance01.timeServer_notify,
+            instance02.timeServer_rpc, instance02.timeServer_notify
+        )
+    }
+    configuration{
+        TimeServer_CLIENT_ASSIGN_BADGES(
+            instance01.timeServer_rpc,
+            instance02.timeServer_rpc
+        )
+
+        instance01._affinity = 1;
+        instance02._affinity = 1;
+    }
+}
+

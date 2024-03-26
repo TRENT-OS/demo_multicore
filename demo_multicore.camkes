@@ -5,35 +5,248 @@
  * @brief Assembly file of the CAmkES application.
  */
 
-import "components/multicore_app/multicore_app.camkes";
+import <std_connector.camkes>;
+
+#include "application_settings.h"
 
 #include "TimeServer/camkes/TimeServer.camkes"
 TimeServer_COMPONENT_DEFINE(TimeServer)
 
+procedure Lock {
+    void lock(void);
+    void unlock(void);
+}
+
+procedure Proc {
+    void        set_time_a(uint64_t time_a);
+    void        set_time_b(uint64_t time_b);
+    uint64_t    get_time_a(void);
+    uint64_t    get_time_b(void);
+    void        increment_entered(void);
+    void        increment_left(void);
+    int         get_entered(void);
+    int         get_left(void);
+}
+
+component multicore_app {
+    control;
+    uses        if_OS_Timer     timeServer_rpc;
+    consumes    TimerReady      timeServer_notify;
+    uses        Lock            lock;
+    uses        Proc            proc;
+    dataport    Buf             buffer;
+}
+
+component Server {
+    // mutex for shared lock
+    has         mutex       m;
+    // data structures for shared time measurement
+    has         mutex       entered_mutex;
+    has         mutex       left_mutex;
+    has         mutex       time_a_mutex;
+    has         mutex       time_b_mutex;
+    has         mutex       entered_read_mutex;
+    has         mutex       left_read_mutex;
+    has         mutex       time_a_read_mutex;
+    has         mutex       time_b_read_mutex;
+    dataport    Buf         buffer;
+    // one lock and one proc server instance for each client instance
+#if NUM_INSTANCES >= 1
+    provides    Lock        GET_LOCK(1);
+    provides    Proc        GET_PROC(1);
+#endif
+#if NUM_INSTANCES >= 2
+    provides    Lock        GET_LOCK(2);
+    provides    Proc        GET_PROC(2);
+#endif
+#if NUM_INSTANCES >= 3
+    provides    Lock        GET_LOCK(3);
+    provides    Proc        GET_PROC(3);
+#endif
+#if NUM_INSTANCES >= 4
+    provides    Lock        GET_LOCK(4);
+    provides    Proc        GET_PROC(4);
+#endif
+}
+
+#define CREATE_MULTICORE_COMPONENT(_idx_) \
+    component multicore_app GET_INSTANCE(_idx_);
+
+#define CONNECT_MULTICORE_COMPONENT(_idx_) \
+    connection seL4RPCCall lock_connection_ ## _idx_( \
+        from GET_INSTANCE(_idx_).lock, \
+        to server.GET_LOCK(_idx_) \
+    ); \
+    \
+    connection seL4RPCCall proc_connection_ ## _idx_( \
+        from GET_INSTANCE(_idx_).proc, \
+        to server.GET_PROC(_idx_) \
+    ); \
+    \
+    connection seL4SharedData buffer_connection_ ## _idx_( \
+        from GET_INSTANCE(_idx_).buffer, \
+        to server.buffer \
+    );
+
+#define CREATE_AND_CONNECT_MULTICORE_COMPONENT(_idx_) \
+        CREATE_MULTICORE_COMPONENT(_idx_) \
+        CONNECT_MULTICORE_COMPONENT(_idx_)
+
 assembly {
     composition {
-        component multicore_app  instance01;
-        component multicore_app  instance02;
-
-        //----------------------------------------------------------------------
-        // TimeServer
-        //----------------------------------------------------------------------
+        component Server server;
         component TimeServer timeServer;
+
+#if NUM_INSTANCES == 1
+        CREATE_AND_CONNECT_MULTICORE_COMPONENT(1)
 
         TimeServer_INSTANCE_CONNECT_CLIENTS(
             timeServer,
-            instance01.timeServer_rpc, instance01.timeServer_notify,
-            instance02.timeServer_rpc, instance02.timeServer_notify
+            GET_INSTANCE(1).timeServer_rpc, GET_INSTANCE(1).timeServer_notify
         )
+#endif
+
+#if NUM_INSTANCES == 2
+        CREATE_AND_CONNECT_MULTICORE_COMPONENT(1)
+        CREATE_AND_CONNECT_MULTICORE_COMPONENT(2)
+
+        TimeServer_INSTANCE_CONNECT_CLIENTS(
+            timeServer,
+            GET_INSTANCE(1).timeServer_rpc, GET_INSTANCE(1).timeServer_notify,
+            GET_INSTANCE(2).timeServer_rpc, GET_INSTANCE(2).timeServer_notify
+        )
+#endif
+
+#if NUM_INSTANCES == 3
+        CREATE_AND_CONNECT_MULTICORE_COMPONENT(1)
+        CREATE_AND_CONNECT_MULTICORE_COMPONENT(2)
+        CREATE_AND_CONNECT_MULTICORE_COMPONENT(3)
+
+        TimeServer_INSTANCE_CONNECT_CLIENTS(
+            timeServer,
+            GET_INSTANCE(1).timeServer_rpc, GET_INSTANCE(1).timeServer_notify,
+            GET_INSTANCE(2).timeServer_rpc, GET_INSTANCE(2).timeServer_notify,
+            GET_INSTANCE(3).timeServer_rpc, GET_INSTANCE(3).timeServer_notify
+        )
+#endif
+
+#if NUM_INSTANCES == 4
+        CREATE_AND_CONNECT_MULTICORE_COMPONENT(1)
+        CREATE_AND_CONNECT_MULTICORE_COMPONENT(2)
+        CREATE_AND_CONNECT_MULTICORE_COMPONENT(3)
+        CREATE_AND_CONNECT_MULTICORE_COMPONENT(4)
+
+        TimeServer_INSTANCE_CONNECT_CLIENTS(
+            timeServer,
+            GET_INSTANCE(1).timeServer_rpc, GET_INSTANCE(1).timeServer_notify,
+            GET_INSTANCE(2).timeServer_rpc, GET_INSTANCE(2).timeServer_notify,
+            GET_INSTANCE(3).timeServer_rpc, GET_INSTANCE(3).timeServer_notify,
+            GET_INSTANCE(4).timeServer_rpc, GET_INSTANCE(4).timeServer_notify
+        )
+#endif
+
     }
     configuration{
+#if NUM_INSTANCES == 1
         TimeServer_CLIENT_ASSIGN_BADGES(
-            instance01.timeServer_rpc,
-            instance02.timeServer_rpc
+            GET_INSTANCE(1).timeServer_rpc
         )
+#elif NUM_INSTANCES == 2
+        TimeServer_CLIENT_ASSIGN_BADGES(
+            GET_INSTANCE(1).timeServer_rpc,
+            GET_INSTANCE(2).timeServer_rpc
+        )
+#elif NUM_INSTANCES == 3
+        TimeServer_CLIENT_ASSIGN_BADGES(
+            GET_INSTANCE(1).timeServer_rpc,
+            GET_INSTANCE(2).timeServer_rpc,
+            GET_INSTANCE(3).timeServer_rpc
+        )
+#elif NUM_INSTANCES == 4
+        TimeServer_CLIENT_ASSIGN_BADGES(
+            GET_INSTANCE(1).timeServer_rpc,
+            GET_INSTANCE(2).timeServer_rpc,
+            GET_INSTANCE(3).timeServer_rpc,
+            GET_INSTANCE(4).timeServer_rpc
+        )
+#endif
 
-        instance01._affinity = 1;
-        instance02._affinity = 1;
+
+        // same priorities, same cores
+#if APP_MODE == SAME_PRIOS_SAME_CORES
+#if NUM_INSTANCES >= 1
+        GET_INSTANCE(1)._affinity = 0;
+        GET_INSTANCE(1)._priority= 240;
+#endif
+#if NUM_INSTANCES >= 2
+        GET_INSTANCE(2)._affinity = 0;
+        GET_INSTANCE(2)._priority= 240;
+#endif
+#if NUM_INSTANCES >= 3
+        GET_INSTANCE(3)._affinity = 0;
+        GET_INSTANCE(3)._priority= 240;
+#endif
+#if NUM_INSTANCES >= 4
+        GET_INSTANCE(4)._affinity = 0;
+        GET_INSTANCE(4)._priority= 240;
+#endif // NUM_INSTANCES
+#endif // APP_MODE
+        // same priorities, different cores
+#if APP_MODE == SAME_PRIOS_DIFF_CORES
+#if NUM_INSTANCES >= 1
+        GET_INSTANCE(1)._affinity = 0;
+        GET_INSTANCE(1)._priority= 240;
+#endif
+#if NUM_INSTANCES >= 2
+        GET_INSTANCE(2)._affinity = 1;
+        GET_INSTANCE(2)._priority= 240;
+#endif
+#if NUM_INSTANCES >= 3
+        GET_INSTANCE(3)._affinity = 2;
+        GET_INSTANCE(3)._priority= 240;
+#endif
+#if NUM_INSTANCES >= 4
+        GET_INSTANCE(4)._affinity = 3;
+        GET_INSTANCE(4)._priority= 240;
+#endif // NUM_INSTANCES
+#endif // APP_MODE
+        // different priorities, same cores
+#if APP_MODE == DIFF_PRIOS_SAME_CORES
+#if NUM_INSTANCES >= 1
+        GET_INSTANCE(1)._affinity = 0;
+        GET_INSTANCE(1)._priority= 240;
+#endif
+#if NUM_INSTANCES >= 2
+        GET_INSTANCE(2)._affinity = 0;
+        GET_INSTANCE(2)._priority= 239;
+#endif
+#if NUM_INSTANCES >= 3
+        GET_INSTANCE(3)._affinity = 0;
+        GET_INSTANCE(3)._priority= 238;
+#endif
+#if NUM_INSTANCES >= 4
+        GET_INSTANCE(4)._affinity = 0;
+        GET_INSTANCE(4)._priority= 237;
+#endif // NUM_INSTANCES
+#endif // APP_MODE
+        // different priorities, different cores
+#if APP_MODE == DIFF_PRIOS_DIFF_CORES
+#if NUM_INSTANCES >= 1
+        GET_INSTANCE(1)._affinity = 0;
+        GET_INSTANCE(1)._priority= 240;
+#endif
+#if NUM_INSTANCES >= 2
+        GET_INSTANCE(2)._affinity = 1;
+        GET_INSTANCE(2)._priority= 239;
+#endif
+#if NUM_INSTANCES >= 3
+        GET_INSTANCE(3)._affinity = 2;
+        GET_INSTANCE(3)._priority= 238;
+#endif
+#if NUM_INSTANCES >= 4
+        GET_INSTANCE(4)._affinity = 3;
+        GET_INSTANCE(4)._priority= 237;
+#endif // NUM_INSTANCES
+#endif // APP_MODE
     }
 }
-
